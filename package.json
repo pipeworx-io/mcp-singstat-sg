@@ -1,0 +1,20 @@
+{
+  "name": "@pipeworx/mcp-singstat-sg",
+  "version": "0.1.0",
+  "description": "SingStat Table Builder MCP — Department of Statistics Singapore.",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "keywords": ["mcp", "mcp-server", "model-context-protocol", "pipeworx", "singstat-sg"],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pipeworx-io/mcp-singstat-sg"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.0"
+  }
+}
