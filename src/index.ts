@@ -682,6 +682,17 @@ function collapse(s: string): string {
  *      `timeFilter` (comma-separated periods) or `between` (from,to range); page with
  *      offset/limit.
  *   3. table_metadata(resourceId) → variable/series structure for a table.
+ *
+ * table_data also accepts `search` instead of `resourceId` (fleet #2706): a router
+ * that only has table_data in its retrieved candidate set — search_tables is a
+ * separate tool and isn't guaranteed to be retrieved alongside it — otherwise has
+ * no way to get a real id and ends up copying the one concrete id that appears in
+ * this file's own schema example / tool-examples.json ("M810001", a population
+ * table, used for EVERY tool here), silently returning a confidently-wrong row for
+ * an unrelated question ("Singapore resident unemployment rate" → M810001, the
+ * age-dependency ratio). table_data(search) resolves the id itself via the same
+ * search_tables endpoint, so one tool call is enough regardless of what else the
+ * router retrieved.
  */
 
 
@@ -718,13 +729,28 @@ const tools: McpToolExport['tools'] = [
   {
     name: 'table_data',
     description:
-      'Fetch the time-series data rows for a Singapore statistics table by resourceId (get ids from search_tables). ' +
+      'Fetch the time-series data rows for a Singapore statistics table. ' +
+      'Pass `resourceId` ONLY if you already have a real one from a prior search_tables/table_metadata call. ' +
+      'Otherwise pass `search` with the topic in plain words (e.g. "resident unemployment rate", "gdp by industry") and this tool ' +
+      'resolves the best-matching table itself — the response carries a `resolved` field naming exactly which table id and title ' +
+      'were used, so NEVER guess or reuse an id you saw in an example; it is almost certainly for a different table. ' +
       'Data is returned under `Data` with a `row` array of series, each containing dated `columns`. ' +
       'Filter time periods with `timeFilter` (comma-separated periods like "2020,2021") or `between` (a from,to range like "2010,2020"); page with offset/limit.',
     inputSchema: {
       type: 'object',
       properties: {
-        resourceId: { type: 'string', description: 'Table id from search_tables, e.g. "M810001".' },
+        resourceId: {
+          type: 'string',
+          description:
+            'A table id you already have (from search_tables or table_metadata). Omit this and use `search` instead when you only ' +
+            'know the topic, not a real id — do not invent or copy one from an unrelated example.',
+        },
+        search: {
+          type: 'string',
+          description:
+            'Free-text topic to resolve a resourceId automatically when you do not already have one, e.g. "resident unemployment rate". ' +
+            'Ignored if `resourceId` is given. Equivalent to calling search_tables yourself and picking the closest title match.',
+        },
         offset: { type: 'integer', description: 'Number of rows to skip (pagination).' },
         limit: { type: 'integer', description: 'Max number of rows to return.' },
         timeFilter: { type: 'string', description: 'Comma-separated specific periods to return, e.g. "2020,2021,2022".' },
@@ -732,7 +758,7 @@ const tools: McpToolExport['tools'] = [
         sortBy: { type: 'string', description: 'Sort expression, e.g. "rowtext asc".' },
         seriesNoORrowNo: { type: 'string', description: 'Comma-separated series/row numbers to limit which series are returned.' },
       },
-      required: ['resourceId'],
+      required: [],
     },
   },
   {
@@ -749,6 +775,102 @@ const tools: McpToolExport['tools'] = [
   },
 ];
 
+type SearchRecord = Record<string, unknown>;
+
+const STOPWORDS = new Set(['of', 'the', 'and', 'by', 'at', 'in', 'on', 'for', 'to', 'a', 'an', 'is', 'are']);
+
+/** Lowercased, punctuation-stripped, stopword-free word set for similarity scoring. */
+function titleWords(s: string): Set<string> {
+  return new Set(
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .split(' ')
+      .filter((w) => w.length > 1 && !STOPWORDS.has(w)),
+  );
+}
+
+/** Intersection-over-union of two word sets — rewards an exact topical match and penalizes a title padded with unrelated qualifiers. */
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let intersection = 0;
+  for (const w of a) if (b.has(w)) intersection++;
+  const union = a.size + b.size - intersection;
+  return union === 0 ? 0 : intersection / union;
+}
+
+async function searchRecords(keyword: string): Promise<SearchRecord[]> {
+  const qs = new URLSearchParams({ keyword, searchOption: 'all' });
+  const resp = (await singstatGet(`/resourceid?${qs.toString()}`)) as { Data?: { records?: unknown } } | undefined;
+  const records = resp?.Data?.records;
+  return Array.isArray(records) ? (records as SearchRecord[]) : [];
+}
+
+interface ResolvedTable {
+  id: string;
+  title: string;
+  score: number;
+  via: 'search:full_phrase' | 'search:per_word_union';
+}
+
+/**
+ * Resolve a free-text topic to the best-matching SingStat resourceId by calling
+ * the same search_tables endpoint the pack already exposes, then scoring titles
+ * by word-set similarity against the query.
+ */
+async function resolveResourceId(search: string): Promise<ResolvedTable | null> {
+  const trimmed = search.trim();
+  if (!trimmed) return null;
+  const qWords = titleWords(trimmed);
+  if (qWords.size === 0) return null;
+
+  const byId = new Map<string, SearchRecord>();
+  let via: ResolvedTable['via'] = 'search:full_phrase';
+
+  const full = await searchRecords(trimmed).catch(() => []);
+  for (const r of full) {
+    const id = recordId(r);
+    if (id) byId.set(id, r);
+  }
+
+  if (byId.size === 0) {
+    // SingStat's own search AND-matches every word in `keyword`, so a multi-word
+    // phrase that doesn't appear verbatim together in any title returns zero rows
+    // even when every individual word does (e.g. "unemployment rate resident" → 0).
+    // Fall back to querying each significant word on its own and union the hits.
+    via = 'search:per_word_union';
+    const significant = [...qWords].filter((w) => w.length >= 4).slice(0, 6);
+    for (const w of significant) {
+      const rows = await searchRecords(w).catch(() => []);
+      for (const r of rows) {
+        const id = recordId(r);
+        if (id && !byId.has(id)) byId.set(id, r);
+      }
+    }
+  }
+
+  if (byId.size === 0) return null;
+
+  let best: { id: string; title: string; score: number } | null = null;
+  for (const [id, r] of byId) {
+    const title = typeof r.title === 'string' ? r.title : '';
+    const score = jaccard(qWords, titleWords(title));
+    if (score <= 0) continue;
+    if (!best || score > best.score || (score === best.score && title.length < best.title.length)) {
+      best = { id, title, score };
+    }
+  }
+  if (!best) return null;
+  return { ...best, via };
+}
+
+function recordId(r: SearchRecord): string | null {
+  const id = r.id;
+  if (typeof id === 'string' && id.trim()) return id.trim();
+  if (typeof id === 'number' && Number.isFinite(id)) return String(id);
+  return null;
+}
+
 async function callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
   switch (name) {
     case 'search_tables': {
@@ -760,14 +882,42 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<un
       return singstatGet(`/resourceid?${qs.toString()}`);
     }
     case 'table_data': {
-      const resourceId = reqStr(args, 'resourceId', '"M810001"');
+      let resourceId = typeof args.resourceId === 'string' ? args.resourceId.trim() : '';
+      const search = typeof args.search === 'string' ? args.search.trim() : '';
+      let resolved: Record<string, unknown> | null = null;
+
+      if (!resourceId) {
+        if (!search) {
+          throw new Error(
+            'Required argument "resourceId" (or "search") is missing. Pass a table id you already have, e.g. {"resourceId":"M810001"}, ' +
+              'or a free-text topic, e.g. {"search":"resident unemployment rate"}, and this tool will resolve the id itself.',
+          );
+        }
+        const match = await resolveResourceId(search);
+        if (!match) {
+          throw new Error(
+            `No SingStat table title matched "${search}". Call search_tables with a shorter or different keyword and pass the "id" it returns as resourceId.`,
+          );
+        }
+        resourceId = match.id;
+        resolved = {
+          search,
+          matched_table_id: match.id,
+          matched_table_title: match.title,
+          matched_via: match.via,
+          match_score: Number(match.score.toFixed(3)),
+        };
+      }
+
       const qs = new URLSearchParams();
       for (const key of ['offset', 'limit', 'timeFilter', 'between', 'sortBy', 'seriesNoORrowNo'] as const) {
         const v = args[key];
         if (v !== undefined && v !== null && String(v).trim() !== '') qs.set(key, String(v));
       }
       const suffix = qs.toString();
-      return singstatGet(`/tabledata/${encodeURIComponent(resourceId)}${suffix ? `?${suffix}` : ''}`);
+      const data = await singstatGet(`/tabledata/${encodeURIComponent(resourceId)}${suffix ? `?${suffix}` : ''}`);
+      if (resolved && data && typeof data === 'object') return { ...(data as Record<string, unknown>), resolved };
+      return data;
     }
     case 'table_metadata': {
       const resourceId = reqStr(args, 'resourceId', '"M810001"');

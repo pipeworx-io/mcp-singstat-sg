@@ -2,14 +2,14 @@
 
 SingStat Table Builder MCP — Department of Statistics Singapore.
 
-Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1683+ live data sources.
+Part of [Pipeworx](https://pipeworx.io) — an MCP gateway connecting AI agents to 1689+ live data sources. This is an independent, unofficial integration — not affiliated with, endorsed by, or published by the upstream provider.
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
 | `search_tables` | Search Singapore official statistics tables (Department of Statistics Singapore) by keyword. Returns resource ids and titles. The `id` of a result (e.g. "M810001") is the resourceId used by table_data and table_metadata. |
-| `table_data` | Fetch the time-series data rows for a Singapore statistics table by resourceId (get ids from search_tables). Data is returned under `Data` with a `row` array of series, each containing dated `columns`. Filter time periods with `timeFilter` (comma-separated periods like "2020,2021") or `between` (a from,to range like "2010,2020"); page with offset/limit. |
+| `table_data` | Fetch the time-series data rows for a Singapore statistics table. Pass `resourceId` ONLY if you already have a real one from a prior search_tables/table_metadata call. Otherwise pass `search` with the topic in plain words (e.g. "resident unemployment rate", "gdp by industry") and this tool resolves the best-matching table itself — the response carries a `resolved` field naming exactly which table id and title were used, so NEVER guess or reuse an id you saw in an example; it is almost certainly for a different table. Data is returned under `Data` with a `row` array of series, each containing dated `columns`. Filter time periods with `timeFilter` (comma-separated periods like "2020,2021") or `between` (a from,to range like "2010,2020"); page with offset/limit. |
 | `table_metadata` | Get the structure/metadata for a Singapore statistics table by resourceId (get ids from search_tables): theme, subject, frequency, period coverage and the list of variables/series. Result is under `Data.records`. |
 
 ## Quick Start
@@ -56,7 +56,7 @@ directly, instead of just this one's:
 }
 ```
 
-Both URLs reach the same gateway and the same 1683+ data sources. The
+Both URLs reach the same gateway and the same 1689+ data sources. The
 only difference is which pack's tools are listed **directly**; `ask_pipeworx`
 reaches all of them from either one.
 
