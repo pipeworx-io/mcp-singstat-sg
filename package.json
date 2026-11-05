@@ -1,6 +1,6 @@
 {
   "name": "@pipeworx/mcp-singstat-sg",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "SingStat Table Builder MCP — Department of Statistics Singapore.",
   "type": "module",
   "main": "lib/index.js",
@@ -27,7 +27,7 @@
     "mode": "gateway",
     "slug": "singstat-sg",
     "gatewaySlug": "singstat-sg",
-    "sourceHash": "v1-ab4fe78bc57ce7ef8c13c72df4db01018da4e22cd0b675082f118be2ce1f68cb",
-    "sourceCommit": "f47d581679e1e887373df51ba623f891fbe4c464"
+    "sourceHash": "v1-bc1071b814259e0cbc547fb3cbb4c1fc79bb4c8d1ab94d576f3bfb8a77db5fec",
+    "sourceCommit": "8fc802aa5e23be625ce08d97178f5676c7bc93f3"
   }
 }
